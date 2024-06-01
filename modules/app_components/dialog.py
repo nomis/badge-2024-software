@@ -1,7 +1,7 @@
 import asyncio
 
 import display
-from events.input import BUTTON_TYPES, ButtonDownEvent
+from events.input import BUTTON_TYPES, ButtonDownEvent, ButtonUpEvent
 from system.eventbus import eventbus
 
 from .tokens import label_font_size, set_color
@@ -81,10 +81,13 @@ class TextDialog:
         self.text = ""
         self.current = 0
         self._result = None
-        eventbus.on(ButtonDownEvent, self._handle_buttondown, self.app)
+        self._repeat_seq = 0
+        eventbus.on_async(ButtonDownEvent, self._handle_buttondown, self.app)
+        eventbus.on(ButtonUpEvent, self._handle_buttonup, self.app)
 
     def _cleanup(self):
         eventbus.remove(ButtonDownEvent, self._handle_buttondown, self.app)
+        eventbus.remove(ButtonUpEvent, self._handle_buttonup, self.app)
 
     async def run(self, render_update):
         # Render once, when the dialogue opens
@@ -121,7 +124,13 @@ class TextDialog:
         self.draw_message(ctx)
         ctx.restore()
 
-    def _handle_buttondown(self, event: ButtonDownEvent):
+    def _up_character(self):
+        self.current = (self.current - 1) % len(self.alphabet)
+
+    def _down_character(self):
+        self.current = (self.current + 1) % len(self.alphabet)
+
+    async def _handle_buttondown(self, event: ButtonDownEvent):
         if BUTTON_TYPES["CANCEL"] in event.button:
             self._cleanup()
             self._result = False
@@ -134,15 +143,47 @@ class TextDialog:
             if self.complete_handler is not None:
                 self.complete_handler()
 
-        if BUTTON_TYPES["UP"] in event.button:
-            self.current = (self.current - 1) % len(self.alphabet)
-
-        if BUTTON_TYPES["DOWN"] in event.button:
-            self.current = (self.current + 1) % len(self.alphabet)
-
         if BUTTON_TYPES["RIGHT"] in event.button:
             self.text += self.alphabet[self.current]
 
         if BUTTON_TYPES["LEFT"] in event.button:
             if len(self.text) > 0:
                 self.text = self.text[:-1]
+
+        if BUTTON_TYPES["UP"] in event.button:
+            print("UP pressed")
+            self._up_character()
+            self._repeat_seq += 1
+            if BUTTON_TYPES["DOWN"] not in event.button:
+                await self._repeat_button(self._repeat_seq, self._up_character)
+
+        if BUTTON_TYPES["DOWN"] in event.button:
+            print("DOWN pressed")
+            self._down_character()
+            self._repeat_seq += 1
+            if BUTTON_TYPES["UP"] not in event.button:
+                await self._repeat_button(self._repeat_seq, self._down_character)
+
+    def _handle_buttonup(self, event: ButtonUpEvent):
+        if BUTTON_TYPES["UP"] in event.button:
+            print("UP released")
+            self._repeat_seq += 1
+
+        if BUTTON_TYPES["DOWN"] in event.button:
+            print("DOWN released")
+            self._repeat_seq += 1
+
+    async def _repeat_button(self, seq, button_repeat):
+        if self._repeat_seq != seq:
+            return
+
+        await asyncio.sleep(1)
+
+        while True:
+            if self._repeat_seq != seq:
+                return
+
+            print("repeat")
+            button_repeat()
+
+            await asyncio.sleep(0.25)
